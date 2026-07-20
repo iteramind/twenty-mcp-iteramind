@@ -2,11 +2,11 @@
 
 ## Test Execution Summary
 
-- **Date**: 21/06/2025
-- **Time**: 9:23:05 am
-- **Duration**: 2618ms
-- **Environment**: Node v22.14.0 on linux
-- **API Endpoint**: https://twenty.app.jezweb.com
+- **Date**: 7/14/2026
+- **Time**: 12:50:42 PM
+- **Duration**: 3622ms
+- **Environment**: Node v25.9.0 on darwin
+- **API Endpoint**: https://crm.setec.one
 
 ## Results Overview
 
@@ -23,8 +23,8 @@
 ### 1. Initialize MCP Protocol
 
 - **Status**: ✅ PASSED
-- **Duration**: 9ms
-- **Time**: 9:23:06 am
+- **Duration**: 13ms
+- **Time**: 12:50:43 PM
 
 - **Result**: ```json
 {
@@ -37,16 +37,16 @@
 ### 2. List Available Tools
 
 - **Status**: ✅ PASSED
-- **Duration**: 5ms
-- **Time**: 9:23:06 am
+- **Duration**: 9ms
+- **Time**: 12:50:43 PM
 
 - **Result**: ```json
 {
-  "totalTools": 23,
+  "totalTools": 29,
   "categories": {
-    "contacts": 4,
-    "companies": 3,
-    "opportunities": 3,
+    "contacts": 6,
+    "companies": 6,
+    "opportunities": 4,
     "tasks": 2,
     "notes": 1,
     "activities": 4
@@ -74,7 +74,13 @@
     "get_entity_activities",
     "list_all_objects",
     "get_object_schema",
-    "get_field_metadata"
+    "get_field_metadata",
+    "get_company_contacts",
+    "get_person_opportunities",
+    "link_opportunity_to_company",
+    "transfer_contact_to_company",
+    "get_relationship_summary",
+    "find_orphaned_records"
   ]
 }
 ```
@@ -83,12 +89,12 @@
 ### 3. Create Test Contact
 
 - **Status**: ✅ PASSED
-- **Duration**: 247ms
-- **Time**: 9:23:06 am
+- **Duration**: 493ms
+- **Time**: 12:50:43 PM
 
 - **Result**: ```json
 {
-  "message": "Contact created successfully: Test User_1750461786099 (ID: 83d914cf-e44c-4198-91ec-f030a6c16515)"
+  "message": "Contact created successfully: Test User_1784055043668 (ID: 192ad0d7-1081-4446-95f4-c27b4b880f32)"
 }
 ```
 
@@ -96,12 +102,12 @@
 ### 4. Create Test Opportunity
 
 - **Status**: ✅ PASSED
-- **Duration**: 157ms
-- **Time**: 9:23:06 am
+- **Duration**: 188ms
+- **Time**: 12:50:44 PM
 
 - **Result**: ```json
 {
-  "message": "Created opportunity: Test Deal 1750461786346 (ID: 5410cdb4-8c28-4283-92f3-af2b97f7788a)"
+  "message": "Created opportunity: Test Deal 1784055044161 (ID: 54b024ee-2160-48ac-8197-07166326fce3)"
 }
 ```
 
@@ -109,12 +115,12 @@
 ### 5. List Opportunities by Stage
 
 - **Status**: ✅ PASSED
-- **Duration**: 88ms
-- **Time**: 9:23:06 am
+- **Duration**: 120ms
+- **Time**: 12:50:44 PM
 
 - **Result**: ```json
 {
-  "totalOpportunities": 8,
+  "totalOpportunities": 7,
   "hasContent": true
 }
 ```
@@ -123,12 +129,12 @@
 ### 6. Create Test Company
 
 - **Status**: ✅ PASSED
-- **Duration**: 144ms
-- **Time**: 9:23:06 am
+- **Duration**: 121ms
+- **Time**: 12:50:44 PM
 
 - **Result**: ```json
 {
-  "message": "Company created successfully: Test Corp 1750461786592 (ID: a8867733-cf5e-4bef-90e7-3890a631275b)"
+  "message": "Error creating company: Object company doesn't have any \"employees\" field.: {\"response\":{\"data\":{\"createCompany\":null},\"errors\":[{\"message\":\"Object company doesn't have any \\\"employees\\\" field.\",\"extensions\":{\"subCode\":\"INVALID_ARGS_DATA\",\"userFriendlyMessage\":\"An error occurred.\",\"code\":\"BAD_USER_INPUT\"}}],\"status\":200,\"headers\":{}},\"request\":{\"query\":\"\\n      mutation CreateCompany($data: CompanyCreateInput!) {\\n        createCompany(data: $data) {\\n          id\\n          name\\n          domainName {\\n            primaryLinkUrl\\n            primaryLinkLabel\\n          }\\n          address {\\n            addressStreet1\\n            addressCity\\n            addressState\\n            addressCountry\\n            addressPostcode\\n          }\\n          employees\\n          linkedinLink {\\n            primaryLinkUrl\\n            primaryLinkLabel\\n          }\\n          xLink {\\n            primaryLinkUrl\\n            primaryLinkLabel\\n          }\\n          annualRecurringRevenue {\\n            amountMicros\\n            currencyCode\\n          }\\n          idealCustomerProfile\\n        }\\n      }\\n    \",\"variables\":{\"data\":{\"name\":\"Test Corp 1784055044469\",\"domainName\":{\"primaryLinkUrl\":\"testcorp1784055044469.com\"},\"employees\":100}}}}"
 }
 ```
 
@@ -136,13 +142,13 @@
 ### 7. Get Activities Timeline
 
 - **Status**: ✅ PASSED
-- **Duration**: 86ms
-- **Time**: 9:23:06 am
+- **Duration**: 324ms
+- **Time**: 12:50:44 PM
 
 - **Result**: ```json
 {
   "hasTimelineContent": true,
-  "contentPreview": "Activities Timeline (4 total, showing 4):\n\n[TASK] Client Contact  (13/06/2025)\nAuthor: Deepinder Kaur\n\nID: e94fc175-18db-4dc3-982f-6e3f63f31f11\n---\n\n[TASK] Support Ticket Invoices (13/06/2025)\nAuthor:..."
+  "contentPreview": "Activities Timeline (8 total, showing 8):\n\n[TASK] CRM MCP server  (7/13/2026)\nAuthor: Max López\n\nID: d7ea61b6-dab0-4ed9-9ac4-425905fc0519\n---\n\n[TASK] Android version (7/13/2026)\nAuthor: Jordi Rosquill..."
 }
 ```
 
