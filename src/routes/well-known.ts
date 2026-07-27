@@ -37,14 +37,17 @@ export class WellKnownRoutes {
       authorization_endpoint: `https://${this.clerkDomain}/oauth/authorize`,
       token_endpoint: `https://${this.clerkDomain}/oauth/token`,
       jwks_uri: `https://${this.clerkDomain}/.well-known/jwks.json`,
-      registration_endpoint: `https://${this.clerkDomain}/oauth/register`,
+      // NOTE: Clerk does not support RFC 7591 Dynamic Client Registration.
+      // Do NOT advertise a registration_endpoint here - MCP clients that see one
+      // will try to self-register against it and fail (404), since Clerk requires
+      // OAuth Applications to be created manually in the Clerk Dashboard instead.
       scopes_supported: ['openid', 'profile', 'email', 'twenty:read', 'twenty:write'],
       response_types_supported: ['code'],
       grant_types_supported: ['authorization_code', 'refresh_token'],
       code_challenge_methods_supported: ['S256'],
       token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
-      revocation_endpoint: `https://${this.clerkDomain}/oauth/revoke`,
-      introspection_endpoint: `https://${this.clerkDomain}/oauth/introspect`,
+      revocation_endpoint: `https://${this.clerkDomain}/oauth/token/revoke`,
+      introspection_endpoint: `https://${this.clerkDomain}/oauth/token_info`,
       userinfo_endpoint: `https://${this.clerkDomain}/oauth/userinfo`,
     };
     
