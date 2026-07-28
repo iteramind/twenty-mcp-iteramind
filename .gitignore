@@ -16,4 +16,4 @@ test-results/*
 .smithery/build/
 .smithery/deploy/
 .smithery/*.log
-!.smithery/config.json
+!.smithery/config.jsontwenty-deploy/
