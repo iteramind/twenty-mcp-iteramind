@@ -40,7 +40,11 @@ export class WellKnownRoutes {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, OPTIONS',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-      'Cache-Control': 'public, max-age=3600',
+      // Deliberately not cached: while we're iterating on OAuth config,
+      // a long max-age here means clients (and any proxy in between) can
+      // keep serving a stale copy for a long time even after the server
+      // is fixed, making changes look like they "didn't take effect".
+      'Cache-Control': 'no-store',
     });
     res.end(JSON.stringify(metadata, null, 2));
   }
@@ -63,7 +67,7 @@ export class WellKnownRoutes {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, OPTIONS',
         'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-        'Cache-Control': 'public, max-age=300',
+        'Cache-Control': 'no-store',
       });
       res.end(JSON.stringify(metadata, null, 2));
     } catch (error) {
