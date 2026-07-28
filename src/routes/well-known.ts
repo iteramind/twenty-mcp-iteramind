@@ -1,25 +1,46 @@
 import { IncomingMessage, ServerResponse } from 'node:http';
 
+/**
+ * OAuth discovery metadata for MCP clients.
+ *
+ * Twenty CRM is itself a full OAuth 2.0 authorization server (authorization
+ * code + PKCE, real dynamic client registration per RFC 7591). There is no
+ * third-party identity provider here: users log in with their own Twenty
+ * account and grant this MCP server access to THEIR data, so every action
+ * an agent takes is attributed to (and limited by the permissions of) the
+ * actual Twenty user who authorized it - not a shared service account.
+ *
+ * This class only serves the RFC 9728 "protected resource" metadata, which
+ * tells MCP clients which authorization server protects this resource. The
+ * client then fetches `${authServerUrl}/.well-known/oauth-authorization-server`
+ * directly FROM Twenty (not from us) to discover the actual authorize/token/
+ * registration endpoints - we don't need to mirror or fake that metadata.
+ */
 export class WellKnownRoutes {
-  private clerkDomain: string;
+  private authServerUrl: string;
   private serverUrl: string;
-  
+
   constructor() {
-    this.clerkDomain = process.env.CLERK_DOMAIN || '';
+    // The PUBLIC url of the Twenty instance (what a user's browser and MCP
+    // client can reach), e.g. https://crm.setec.one. This can differ from
+    // TWENTY_BASE_URL, which the server uses for its own internal API calls
+    // (e.g. http://server:3000 over a private docker network).
+    this.authServerUrl = process.env.TWENTY_PUBLIC_URL || process.env.TWENTY_BASE_URL || '';
     this.serverUrl = process.env.MCP_SERVER_URL || 'http://localhost:3000';
   }
-  
+
   async handleProtectedResource(req: IncomingMessage, res: ServerResponse): Promise<void> {
     // RFC 9728 - OAuth 2.0 Protected Resource Metadata
     const metadata = {
       resource: this.serverUrl,
-      authorization_servers: [`https://${this.clerkDomain}`],
+      authorization_servers: [this.authServerUrl],
       bearer_methods_supported: ['header'],
       resource_documentation: 'https://github.com/jezweb/twenty-mcp',
-      resource_signing_alg_values_supported: ['RS256'],
-      scopes_supported: ['twenty:read', 'twenty:write'],
+      // Twenty's own OAuth scopes (see https://docs.twenty.com/developers/extend/oauth):
+      // `api` = full read/write access, `profile` = read the user's profile.
+      scopes_supported: ['api', 'profile'],
     };
-    
+
     res.writeHead(200, {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
@@ -29,38 +50,7 @@ export class WellKnownRoutes {
     });
     res.end(JSON.stringify(metadata, null, 2));
   }
-  
-  async handleAuthorizationServer(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    // RFC 8414 - OAuth 2.0 Authorization Server Metadata
-    const metadata = {
-      issuer: `https://${this.clerkDomain}`,
-      authorization_endpoint: `https://${this.clerkDomain}/oauth/authorize`,
-      token_endpoint: `https://${this.clerkDomain}/oauth/token`,
-      jwks_uri: `https://${this.clerkDomain}/.well-known/jwks.json`,
-      // NOTE: Clerk does not support RFC 7591 Dynamic Client Registration.
-      // Do NOT advertise a registration_endpoint here - MCP clients that see one
-      // will try to self-register against it and fail (404), since Clerk requires
-      // OAuth Applications to be created manually in the Clerk Dashboard instead.
-      scopes_supported: ['openid', 'profile', 'email', 'twenty:read', 'twenty:write'],
-      response_types_supported: ['code'],
-      grant_types_supported: ['authorization_code', 'refresh_token'],
-      code_challenge_methods_supported: ['S256'],
-      token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
-      revocation_endpoint: `https://${this.clerkDomain}/oauth/token/revoke`,
-      introspection_endpoint: `https://${this.clerkDomain}/oauth/token_info`,
-      userinfo_endpoint: `https://${this.clerkDomain}/oauth/userinfo`,
-    };
-    
-    res.writeHead(200, {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-      'Cache-Control': 'public, max-age=3600',
-    });
-    res.end(JSON.stringify(metadata, null, 2));
-  }
-  
+
   async handleOptions(req: IncomingMessage, res: ServerResponse): Promise<void> {
     res.writeHead(200, {
       'Access-Control-Allow-Origin': '*',

@@ -7,63 +7,53 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { TwentyClient } from './client/twenty-client.js';
 import { registerPersonTools, registerCompanyTools, registerTaskTools, registerOpportunityTools } from './tools/index.js';
 import { WellKnownRoutes } from './routes/well-known.js';
-import { AuthMiddleware, AuthenticatedRequest } from './auth/middleware.js';
-import { TokenValidator } from './auth/token-validator.js';
-import { ClerkClient } from './auth/clerk-client.js';
-import { getKeyStorageService } from './auth/key-storage.js';
-import { ApiKeyRoutes } from './routes/api-keys.js';
 import { IPMiddleware } from './auth/ip-middleware.js';
 
 async function main() {
   const port = parseInt(process.env.PORT || '3000');
+  // AUTH_ENABLED here means "require each caller to log in with their own
+  // Twenty account via OAuth" - there is no separate identity provider or
+  // per-user key storage. The bearer token a client sends after completing
+  // Twenty's own OAuth flow IS the credential used to call Twenty's API, so
+  // every action is scoped to that user's own Twenty permissions.
   const authEnabled = process.env.AUTH_ENABLED === 'true';
+  const requireAuth = authEnabled && process.env.REQUIRE_AUTH !== 'false';
   const wellKnownRoutes = new WellKnownRoutes();
   const ipMiddleware = new IPMiddleware();
-  
-  // Initialize auth components only if auth is enabled
-  let clerkClient: ClerkClient | null = null;
-  let tokenValidator: TokenValidator | null = null;
-  let authMiddleware: AuthMiddleware | null = null;
-  let keyStorage: any = null;
-  let apiKeyRoutes: ApiKeyRoutes | null = null;
-  
-  if (authEnabled) {
-    clerkClient = new ClerkClient();
-    tokenValidator = new TokenValidator(clerkClient);
-    authMiddleware = new AuthMiddleware(tokenValidator);
-    keyStorage = getKeyStorageService();
-    apiKeyRoutes = new ApiKeyRoutes();
-  }
-  
+  const mcpServerUrl = process.env.MCP_SERVER_URL || `http://localhost:${port}`;
+
   // Parse configuration from multiple sources
-  async function parseConfig(url: string, userId?: string) {
+  function parseConfig(url: string, bearerToken?: string) {
     const urlObj = new URL(url, `http://localhost:${port}`);
     const params = urlObj.searchParams;
-    
-    // Check for user-specific stored API key first
-    let apiKey = params.get('apiKey');
-    let baseUrl = params.get('baseUrl');
-    
-    if (authEnabled && userId && !apiKey && keyStorage) {
-      const storedKey = await keyStorage.getApiKey(userId);
-      if (storedKey) {
-        apiKey = storedKey.twentyApiKey;
-        baseUrl = storedKey.twentyBaseUrl || baseUrl;
-      }
-    }
-    
-    // Priority: URL params > User stored key > Environment variables > Smithery config
+
+    // Priority: the caller's own OAuth bearer token (their Twenty identity)
+    // > explicit query params > environment variables (shared fallback key).
     return {
-      apiKey: apiKey || 
-              process.env.TWENTY_API_KEY || 
-              process.env.SMITHERY_CONFIG_APIKEY || 
+      apiKey: bearerToken ||
+              params.get('apiKey') ||
+              process.env.TWENTY_API_KEY ||
+              process.env.SMITHERY_CONFIG_APIKEY ||
               process.env.apiKey,
-      baseUrl: baseUrl || 
-               process.env.TWENTY_BASE_URL || 
-               process.env.SMITHERY_CONFIG_BASEURL || 
+      baseUrl: params.get('baseUrl') ||
+               process.env.TWENTY_BASE_URL ||
+               process.env.SMITHERY_CONFIG_BASEURL ||
                process.env.baseUrl ||
                'https://api.twenty.com',
     };
+  }
+
+  function sendUnauthorized(res: import('node:http').ServerResponse, message: string): void {
+    res.writeHead(401, {
+      'Content-Type': 'application/json',
+      // Points MCP clients at our protected-resource metadata so they know
+      // to start Twenty's OAuth flow (RFC 9728 style challenge).
+      'WWW-Authenticate': `Bearer resource_metadata="${mcpServerUrl}/.well-known/oauth-protected-resource"`,
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+    });
+    res.end(JSON.stringify({ error: 'unauthorized', error_description: message }));
   }
 
   // Create HTTP server
@@ -72,41 +62,27 @@ async function main() {
     if (!await ipMiddleware.checkAccess(req, res)) {
       return; // IP middleware already sent response
     }
-    
+
     // Handle CORS preflight requests
     if (req.method === 'OPTIONS') {
       await wellKnownRoutes.handleOptions(req, res);
       return;
     }
-    
+
     // Handle health check endpoint
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ 
-        status: 'healthy', 
-        service: 'twenty-mcp-server', 
+      res.end(JSON.stringify({
+        status: 'healthy',
+        service: 'twenty-mcp-server',
         authEnabled,
         ipProtection: ipMiddleware.getConfig().enabled
       }));
       return;
     }
-    
-    // Handle API key management endpoints
-    if (req.url?.startsWith('/api/keys')) {
-      if (!authEnabled || !authMiddleware || !apiKeyRoutes) {
-        res.writeHead(404, { 'Content-Type': 'text/plain' });
-        res.end('Not Found');
-        return;
-      }
-      const authReq = req as AuthenticatedRequest;
-      if (!await authMiddleware.authenticate(authReq, res)) {
-        return;
-      }
-      await apiKeyRoutes.handle(authReq, res);
-      return;
-    }
-    
-    // Handle OAuth discovery endpoints
+
+    // Handle OAuth discovery endpoint (points clients at Twenty's own
+    // authorization server - see routes/well-known.ts)
     if (req.url === '/.well-known/oauth-protected-resource') {
       if (!authEnabled) {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -114,16 +90,6 @@ async function main() {
         return;
       }
       await wellKnownRoutes.handleProtectedResource(req, res);
-      return;
-    }
-    
-    if (req.url === '/.well-known/oauth-authorization-server') {
-      if (!authEnabled) {
-        res.writeHead(404, { 'Content-Type': 'text/plain' });
-        res.end('Not Found');
-        return;
-      }
-      await wellKnownRoutes.handleAuthorizationServer(req, res);
       return;
     }
 
@@ -135,31 +101,33 @@ async function main() {
     }
 
     try {
-      // Authenticate request if auth is enabled
-      const authReq = req as AuthenticatedRequest;
-      if (authEnabled && authMiddleware) {
-        if (!await authMiddleware.authenticate(authReq, res)) {
-          return; // Auth middleware already sent response
-        }
-      }
-      // Parse configuration from query parameters
-      const userId = authReq.auth?.userId;
-      const config = await parseConfig(req.url, userId);
-      
-      if (!config.apiKey) {
-        // If authenticated but no API key stored
-        if (authEnabled && userId) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            error: 'No API key configured',
-            error_description: 'Please configure your Twenty API key first'
-          }));
+      // Extract the caller's bearer token (their Twenty OAuth access token).
+      // We don't verify it ourselves - Twenty's own API is the enforcement
+      // point and will reject invalid/expired tokens on the actual GraphQL
+      // call, so there's no separate identity layer to keep in sync.
+      const authHeader = req.headers.authorization;
+      let bearerToken: string | undefined;
+
+      if (authHeader) {
+        if (!authHeader.startsWith('Bearer ')) {
+          sendUnauthorized(res, 'Invalid Authorization header format');
           return;
         }
-        // For non-authenticated requests
+        bearerToken = authHeader.substring(7);
+      } else if (requireAuth) {
+        sendUnauthorized(res, 'Missing Authorization header - please log in with your Twenty account');
+        return;
+      }
+
+      const config = parseConfig(req.url, bearerToken);
+
+      if (!config.apiKey) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
-          error: 'Missing required apiKey parameter'
+          error: 'Missing credentials',
+          error_description: authEnabled
+            ? 'Please log in with your Twenty account'
+            : 'Missing required apiKey parameter'
         }));
         return;
       }
@@ -174,11 +142,10 @@ async function main() {
           experimental: {
             authentication: {
               type: 'oauth2',
-              required: authEnabled && process.env.REQUIRE_AUTH === 'true',
+              required: requireAuth,
               enabled: authEnabled,
               discoveryEndpoints: authEnabled ? {
                 protectedResource: '/.well-known/oauth-protected-resource',
-                authorizationServer: '/.well-known/oauth-authorization-server'
               } : undefined
             }
           }
@@ -239,9 +206,11 @@ async function main() {
   httpServer.listen(port, () => {
     console.log(`Twenty MCP Server running at http://localhost:${port}/mcp`);
     console.log(`Health check available at http://localhost:${port}/health`);
-    
+
     // Log configuration source for debugging
-    if (process.env.SMITHERY_CONFIG_APIKEY) {
+    if (authEnabled) {
+      console.log('OAuth enabled - each caller logs in with their own Twenty account');
+    } else if (process.env.SMITHERY_CONFIG_APIKEY) {
       console.log('Running in Smithery environment');
     } else if (process.env.TWENTY_API_KEY) {
       console.log('Using environment variables for configuration');
