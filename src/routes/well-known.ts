@@ -9,12 +9,6 @@ import { IncomingMessage, ServerResponse } from 'node:http';
  * account and grant this MCP server access to THEIR data, so every action
  * an agent takes is attributed to (and limited by the permissions of) the
  * actual Twenty user who authorized it - not a shared service account.
- *
- * This class only serves the RFC 9728 "protected resource" metadata, which
- * tells MCP clients which authorization server protects this resource. The
- * client then fetches `${authServerUrl}/.well-known/oauth-authorization-server`
- * directly FROM Twenty (not from us) to discover the actual authorize/token/
- * registration endpoints - we don't need to mirror or fake that metadata.
  */
 export class WellKnownRoutes {
   private authServerUrl: string;
@@ -49,6 +43,37 @@ export class WellKnownRoutes {
       'Cache-Control': 'public, max-age=3600',
     });
     res.end(JSON.stringify(metadata, null, 2));
+  }
+
+  async handleAuthorizationServer(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // RFC 8414 - OAuth 2.0 Authorization Server Metadata.
+    //
+    // Some MCP clients only ever query the RESOURCE server's own
+    // `/.well-known/oauth-authorization-server` (they don't follow the
+    // `authorization_servers` entry from the protected-resource metadata out
+    // to the authorization server's own domain). To be compatible with
+    // those clients, we mirror it here by proxying Twenty's real metadata
+    // live, rather than hand-copying values that could drift out of sync.
+    try {
+      const response = await fetch(`${this.authServerUrl}/.well-known/oauth-authorization-server`);
+      const metadata = await response.json();
+
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+        'Cache-Control': 'public, max-age=300',
+      });
+      res.end(JSON.stringify(metadata, null, 2));
+    } catch (error) {
+      console.error('Failed to fetch Twenty OAuth authorization server metadata:', error);
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'bad_gateway',
+        error_description: 'Could not reach Twenty\'s OAuth authorization server metadata',
+      }));
+    }
   }
 
   async handleOptions(req: IncomingMessage, res: ServerResponse): Promise<void> {

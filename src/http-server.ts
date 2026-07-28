@@ -81,7 +81,7 @@ async function main() {
       return;
     }
 
-    // Handle OAuth discovery endpoint (points clients at Twenty's own
+    // Handle OAuth discovery endpoints (points clients at Twenty's own
     // authorization server - see routes/well-known.ts)
     if (req.url === '/.well-known/oauth-protected-resource') {
       if (!authEnabled) {
@@ -90,6 +90,16 @@ async function main() {
         return;
       }
       await wellKnownRoutes.handleProtectedResource(req, res);
+      return;
+    }
+
+    if (req.url === '/.well-known/oauth-authorization-server') {
+      if (!authEnabled) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not Found');
+        return;
+      }
+      await wellKnownRoutes.handleAuthorizationServer(req, res);
       return;
     }
 
