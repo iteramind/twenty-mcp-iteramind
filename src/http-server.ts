@@ -9,6 +9,11 @@ import { registerPersonTools, registerCompanyTools, registerTaskTools, registerO
 import { WellKnownRoutes } from './routes/well-known.js';
 import { IPMiddleware } from './auth/ip-middleware.js';
 
+interface McpSession {
+  server: McpServer;
+  transport: StreamableHTTPServerTransport;
+}
+
 async function main() {
   const port = parseInt(process.env.PORT || '3000');
   // AUTH_ENABLED here means "require each caller to log in with their own
@@ -21,6 +26,16 @@ async function main() {
   const wellKnownRoutes = new WellKnownRoutes();
   const ipMiddleware = new IPMiddleware();
   const mcpServerUrl = process.env.MCP_SERVER_URL || `http://localhost:${port}`;
+
+  // The MCP Streamable HTTP transport is stateful: the `initialize` call
+  // creates a session (an id returned in the `Mcp-Session-Id` header), and
+  // every later call in that same session (tools/list, tools/call, ...)
+  // must be routed to that SAME transport/server instance for the session
+  // to be recognized - a fresh transport has no memory of a prior session
+  // id and will reject the request. We keep a small in-memory map from
+  // session id to its {server, transport} pair so follow-up requests reuse
+  // the right instance instead of always starting a brand new session.
+  const sessions = new Map<string, McpSession>();
 
   // Parse configuration from multiple sources
   function parseConfig(url: string, bearerToken?: string) {
@@ -54,6 +69,47 @@ async function main() {
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
     });
     res.end(JSON.stringify({ error: 'unauthorized', error_description: message }));
+  }
+
+  function createSession(apiKey: string, baseUrl: string): McpSession {
+    const server = new McpServer({
+      name: 'twenty-mcp-server',
+      version: '1.0.0',
+    }, {
+      capabilities: {
+        tools: {},
+        experimental: {
+          authentication: {
+            type: 'oauth2',
+            required: requireAuth,
+            enabled: authEnabled,
+            discoveryEndpoints: authEnabled ? {
+              protectedResource: '/.well-known/oauth-protected-resource',
+            } : undefined
+          }
+        }
+      }
+    });
+
+    const client = new TwentyClient({ apiKey, baseUrl });
+
+    registerPersonTools(server, client);
+    registerCompanyTools(server, client);
+    registerTaskTools(server, client);
+    registerOpportunityTools(server, client);
+
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (sessionId) => {
+        sessions.set(sessionId, session);
+      },
+      onsessionclosed: (sessionId) => {
+        sessions.delete(sessionId);
+      },
+    });
+
+    const session: McpSession = { server, transport };
+    return session;
   }
 
   // Create HTTP server
@@ -129,57 +185,33 @@ async function main() {
         return;
       }
 
-      const config = parseConfig(req.url, bearerToken);
+      // Reuse the session's existing server/transport if the client sent
+      // back a known Mcp-Session-Id (e.g. a tools/list or tools/call
+      // following an earlier initialize) - otherwise this must be a fresh
+      // `initialize` call, so build a new session for it.
+      const incomingSessionId = req.headers['mcp-session-id'];
+      const sessionIdHeader = Array.isArray(incomingSessionId) ? incomingSessionId[0] : incomingSessionId;
+      let session = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
 
-      if (!config.apiKey) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          error: 'Missing credentials',
-          error_description: authEnabled
-            ? 'Please log in with your Twenty account'
-            : 'Missing required apiKey parameter'
-        }));
-        return;
+      if (!session) {
+        const config = parseConfig(req.url, bearerToken);
+
+        if (!config.apiKey) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: 'Missing credentials',
+            error_description: authEnabled
+              ? 'Please log in with your Twenty account'
+              : 'Missing required apiKey parameter'
+          }));
+          return;
+        }
+
+        session = createSession(config.apiKey, config.baseUrl);
+        await session.server.connect(session.transport);
       }
 
-      // Create MCP server with Twenty client
-      const server = new McpServer({
-        name: 'twenty-mcp-server',
-        version: '1.0.0',
-      }, {
-        capabilities: {
-          tools: {},
-          experimental: {
-            authentication: {
-              type: 'oauth2',
-              required: requireAuth,
-              enabled: authEnabled,
-              discoveryEndpoints: authEnabled ? {
-                protectedResource: '/.well-known/oauth-protected-resource',
-              } : undefined
-            }
-          }
-        }
-      });
-
-      const client = new TwentyClient({
-        apiKey: config.apiKey,
-        baseUrl: config.baseUrl,
-      });
-
-      // Register tools
-      registerPersonTools(server, client);
-      registerCompanyTools(server, client);
-      registerTaskTools(server, client);
-      registerOpportunityTools(server, client);
-
-      // Create streamable HTTP transport
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-      });
-
-      // Connect server to transport
-      await server.connect(transport);
+      const { transport } = session;
 
       // Parse request body for POST requests
       let body: any = undefined;
