@@ -141,6 +141,13 @@ test('el token de otro usuario no puede reutilizar la sesión', async () => {
   assert.equal(seenTokens.length, 0);
 });
 
+test('una sesión desconocida (p. ej. tras reiniciar) recibe 404 para que el cliente reabra', async () => {
+  const token = jwt({ sub: 'user-1', workspaceId: 'ws', exp: inOneHour() });
+  const { res, json } = await rpc('/mcp', token, searchCall(2), 'sesion-que-ya-no-existe');
+  assert.equal(res.status, 404);
+  assert.equal(json.error.code, -32001);
+});
+
 test('la raíz responde igual que /mcp', async () => {
   const anon = await fetch(`${mcpUrl}/`, { method: 'POST', body: '{}' });
   assert.equal(anon.status, 401);

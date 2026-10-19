@@ -240,6 +240,19 @@ async function main() {
       const sessionIdHeader = Array.isArray(incomingSessionId) ? incomingSessionId[0] : incomingSessionId;
       let session = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
 
+      // Sesión que ya no existe (reinicio del servidor o cerrada por inactividad).
+      // El protocolo MCP pide 404 para que el cliente abra una nueva solo; con
+      // cualquier otro código el conector se queda atorado hasta reconectar a mano.
+      if (sessionIdHeader && !session) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          jsonrpc: '2.0',
+          error: { code: -32001, message: 'Session not found' },
+          id: null,
+        }));
+        return;
+      }
+
       if (session && bearerToken && bearerToken === session.rejectedToken) {
         sendUnauthorized(res, 'Access token rejected by Twenty', resourcePath, 'invalid_token');
         return;

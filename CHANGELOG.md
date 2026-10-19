@@ -16,6 +16,10 @@ All notable changes to Twenty MCP Server will be documented in this file.
   respondía "Token has expired". Ahora usa el token nuevo del mismo usuario, y un token
   expirado (por `exp` del JWT) o ya rechazado por Twenty recibe HTTP 401 `invalid_token`
   para que el cliente lo renueve solo.
+- Una sesión MCP desconocida (tras reiniciar el servidor, o cerrada por inactividad)
+  respondía 400 "Server not initialized" y el conector se quedaba atorado hasta reconectar a
+  mano. Ahora responde 404, que es la señal del protocolo para que el cliente abra una sesión
+  nueva solo.
 - `list_opportunities_by_stage` pedía 100 registros en una sola consulta y Twenty limita a
   60 por consulta. Ahora recorre todas las páginas.
 - Las herramientas de esquema (`list_all_objects`, `get_object_schema`, `get_field_metadata`)
