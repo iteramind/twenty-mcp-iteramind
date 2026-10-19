@@ -41,7 +41,7 @@ All notable changes to Twenty MCP Server will be documented in this file.
   como destructiva (`destructiveHint`). Los registros van a la papelera de Twenty.
 - La raíz `/` responde igual que `/mcp`. Se sirven los metadatos OAuth también en
   `/.well-known/oauth-protected-resource/mcp` (RFC 9728).
-- `npm run test:unit` y `npm run verify:live`.
+- `npm run test:unit`, `npm run verify:live`, `npm run e2e:write` y `npm run e2e:http`.
 
 ### 💔 Breaking Changes
 - Las búsquedas y `get_tasks` usan `cursor` en lugar de `offset`, y regresan

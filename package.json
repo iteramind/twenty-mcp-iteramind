@@ -19,6 +19,8 @@
     "test": "node tests/run-tests.js",
     "test:unit": "node --import tsx --test tests/unit/*.test.ts",
     "verify:live": "node --env-file=.env --import tsx scripts/verify-live.ts",
+    "e2e:write": "node --env-file=.env --import tsx scripts/e2e-write.ts",
+    "e2e:http": "node --env-file=.env --import tsx scripts/e2e-http.ts",
     "test:full": "node tests/test-suite.js",
     "test:smoke": "node tests/smoke-test.js",
     "test:oauth": "node tests/oauth-test-suite.js",

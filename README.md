@@ -51,8 +51,9 @@ como `cursor`. Ya no existe `offset`.
 ```bash
 npm run test:unit      # pruebas sin red (cliente GraphQL simulado + servidor HTTP real)
 npm run verify:live    # contra Twenty real; requiere TWENTY_API_KEY y TWENTY_BASE_URL en .env
-npm run verify:live -- --write   # además crea, vincula, actualiza y borra registros "TEST-MCP"
-                                 # (requiere TEST_COMPANY_ID / TEST_PERSON_ID / TEST_OPPORTUNITY_ID)
+npm run e2e:write      # todas las herramientas que escriben, sobre registros "TEST-MCP" que
+                       # crea y al final manda a la papelera (nunca borra otros registros)
+npm run e2e:http       # levanta el servidor HTTP en local y lo usa como Claude (solo lectura)
 ```
 
 ## Overview
