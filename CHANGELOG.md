@@ -2,6 +2,53 @@
 
 All notable changes to Twenty MCP Server will be documented in this file.
 
+## [Unreleased]
+
+### 🐛 Bug Fixes
+- `search_opportunities` fallaba siempre (`Argument not allowed: skip`). Ahora pagina por
+  cursor (`first`/`after`) y regresa `pageInfo`/`totalCount`. También incluye el ID de cada
+  oportunidad en la respuesta para poder usar `get_opportunity`.
+- `search_contacts` y `search_companies` ignoraban `offset` sin avisar. Ahora usan `cursor`.
+- `get_tasks` ignoraba `limit` y devolvía `body` vacío (Twenty movió el contenido a
+  `bodyV2`). Ahora devuelve body, responsable, vencimiento y registros vinculados, y acepta
+  filtros por estatus, responsable o registro vinculado.
+- Sesión MCP con token renovado: la sesión seguía usando el token original y Twenty
+  respondía "Token has expired". Ahora usa el token nuevo del mismo usuario, y un token
+  expirado (por `exp` del JWT) o ya rechazado por Twenty recibe HTTP 401 `invalid_token`
+  para que el cliente lo renueve solo.
+- `list_opportunities_by_stage` pedía 100 registros en una sola consulta y Twenty limita a
+  60 por consulta. Ahora recorre todas las páginas.
+- Las herramientas de esquema (`list_all_objects`, `get_object_schema`, `get_field_metadata`)
+  consultaban `/graphql` y pedían `isCustom`, que ya no existe en Twenty 2.x. Ahora usan
+  `/metadata` y distinguen los objetos y campos personalizados por su aplicación. Verificadas
+  contra crm.setec.one y activadas en el servidor HTTP.
+- `create_note` mandaba `authorId`, que no existe en Twenty.
+- `create_contact` / `update_contact` / `create_company` / `update_company` usaban campos que
+  Twenty 2.x ya no tiene (`city`, `employees`, `xLink`, `annualRecurringRevenue`,
+  `idealCustomerProfile`) y `update_contact` mandaba los datos planos (`firstName`, `email`...)
+  en vez de la forma anidada de Twenty. Ahora se mapean bien; la empresa acepta
+  `annualRevenue` (con `currency`, default MXN) y `accountOwnerId`, y los teléfonos sin `+`
+  se mandan con su país (`phoneCountry`, default MX). Verificado con
+  `scripts/check-write-fields.ts`.
+
+### 🎉 Added
+- `get_task`, `update_task`, `get_notes`, `get_note`, `list_workspace_members`.
+- `create_task` y `create_note` aceptan `companyId`, `personId` y `opportunityId`.
+  `link_activity` vincula una tarea o nota ya existente. Los nombres de columna
+  (`companyId` o `targetCompanyId`) se detectan según la versión de Twenty.
+- `delete_record` en dos pasos: la primera llamada muestra qué se borraría y entrega un
+  `confirmationToken` de un solo uso (10 min). Solo se borra con ese código. Está marcada
+  como destructiva (`destructiveHint`). Los registros van a la papelera de Twenty.
+- La raíz `/` responde igual que `/mcp`. Se sirven los metadatos OAuth también en
+  `/.well-known/oauth-protected-resource/mcp` (RFC 9728).
+- `npm run test:unit` y `npm run verify:live`.
+
+### 💔 Breaking Changes
+- Las búsquedas y `get_tasks` usan `cursor` en lugar de `offset`, y regresan
+  `{ results, pageInfo, totalCount }` en lugar de un arreglo.
+- Se quitaron los parámetros `city` (contactos) y `employees`, `xUrl`,
+  `annualRecurringRevenue`, `idealCustomerProfile` (empresas), que Twenty 2.x rechaza.
+
 ## [1.3.0] - 2026-01-12
 
 ### 🎉 Added

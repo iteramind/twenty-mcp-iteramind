@@ -1,9 +1,69 @@
 import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { TwentyClient } from '../client/twenty-client.js';
+import type { Person, Company } from '../types/twenty.js';
 import { registerOpportunityTools } from './opportunities.js';
 import { registerActivityTools } from './activities.js';
 import { registerMetadataTools } from './metadata.js';
+
+// Campos que acepta Twenty 2.x. Los parámetros planos de las herramientas se
+// convierten aquí a la forma anidada de Twenty (name, emails, phones, links, ...).
+// Solo se envía lo que el usuario pidió cambiar.
+const contactParams = {
+  email: z.string().email().optional().describe('Primary email address'),
+  phone: z.string().optional().describe('Primary phone number, e.g. "+52 81 1234 5678" or a national number (see phoneCountry)'),
+  phoneCountry: z.string().optional().describe('ISO country code for a phone without "+" prefix (default MX)'),
+  companyId: z.string().optional().describe('ID of associated company'),
+  jobTitle: z.string().optional().describe('Job title'),
+  linkedinUrl: z.string().url().optional().describe('LinkedIn profile URL'),
+};
+
+function toPersonData(args: {
+  firstName?: string; lastName?: string; email?: string; phone?: string; phoneCountry?: string;
+  companyId?: string; jobTitle?: string; linkedinUrl?: string;
+}) {
+  return {
+    ...((args.firstName !== undefined || args.lastName !== undefined) && {
+      name: { firstName: args.firstName ?? '', lastName: args.lastName ?? '' },
+    }),
+    ...(args.email !== undefined && { emails: { primaryEmail: args.email } }),
+    // Twenty rechaza un teléfono sin país: con "+" va completo, si no, con su código de país.
+    ...(args.phone !== undefined && {
+      phones: args.phone.trim().startsWith('+')
+        ? { primaryPhoneNumber: args.phone.trim() }
+        : { primaryPhoneNumber: args.phone.trim(), primaryPhoneCountryCode: args.phoneCountry ?? 'MX' },
+    }),
+    ...(args.companyId !== undefined && { companyId: args.companyId }),
+    ...(args.jobTitle !== undefined && { jobTitle: args.jobTitle }),
+    ...(args.linkedinUrl !== undefined && { linkedinLink: { primaryLinkUrl: args.linkedinUrl } }),
+  };
+}
+
+const companyParams = {
+  domainName: z.string().optional().describe('Company domain name'),
+  address: z.string().optional().describe('Street address'),
+  linkedinUrl: z.string().url().optional().describe('LinkedIn company URL'),
+  annualRevenue: z.number().optional().describe('Annual revenue in currency units'),
+  currency: z.string().optional().default('MXN').describe('Currency code for annualRevenue (e.g. MXN, USD)'),
+  accountOwnerId: z.string().optional().describe('Workspace member ID of the account owner (see list_workspace_members)'),
+};
+
+function toCompanyData(args: {
+  name?: string; domainName?: string; address?: string; linkedinUrl?: string;
+  annualRevenue?: number; currency?: string; accountOwnerId?: string;
+}) {
+  return {
+    ...(args.name !== undefined && { name: args.name }),
+    ...(args.domainName !== undefined && { domainName: { primaryLinkUrl: args.domainName } }),
+    ...(args.address !== undefined && { address: { addressStreet1: args.address } }),
+    ...(args.linkedinUrl !== undefined && { linkedinLink: { primaryLinkUrl: args.linkedinUrl } }),
+    ...(args.annualRevenue !== undefined && {
+      annualRevenue: { amountMicros: Math.round(args.annualRevenue * 1000000), currencyCode: args.currency ?? 'MXN' },
+    }),
+    ...(args.accountOwnerId !== undefined && { accountOwnerId: args.accountOwnerId }),
+  };
+}
 
 export function registerPersonTools(server: McpServer, client: TwentyClient) {
   server.tool(
@@ -12,42 +72,11 @@ export function registerPersonTools(server: McpServer, client: TwentyClient) {
     {
       firstName: z.string().describe('First name of the contact'),
       lastName: z.string().describe('Last name of the contact'),
-      email: z.string().email().optional().describe('Email address'),
-      phone: z.string().optional().describe('Phone number'),
-      companyId: z.string().optional().describe('ID of associated company'),
-      jobTitle: z.string().optional().describe('Job title'),
-      linkedinUrl: z.string().url().optional().describe('LinkedIn profile URL'),
-      city: z.string().optional().describe('City where the contact is located'),
+      ...contactParams,
     },
     async (args) => {
     try {
-      // Transform flat input to Twenty's nested structure
-      const personData = {
-        name: {
-          firstName: args.firstName,
-          lastName: args.lastName,
-        },
-        ...(args.email && {
-          emails: {
-            primaryEmail: args.email,
-          },
-        }),
-        ...(args.phone && {
-          phones: {
-            primaryPhoneNumber: args.phone,
-          },
-        }),
-        ...(args.companyId && { companyId: args.companyId }),
-        ...(args.jobTitle && { jobTitle: args.jobTitle }),
-        ...(args.linkedinUrl && {
-          linkedinLink: {
-            primaryLinkUrl: args.linkedinUrl,
-          },
-        }),
-        ...(args.city && { city: args.city }),
-      };
-
-      const person = await client.createPerson(personData);
+      const person = await client.createPerson(toPersonData(args) as Person);
       return {
         content: [{
           type: 'text' as const,
@@ -91,22 +120,22 @@ export function registerPersonTools(server: McpServer, client: TwentyClient) {
 
   server.tool(
     'update_contact',
-    'Update an existing contact in Twenty CRM',
+    'Update an existing contact in Twenty CRM. Only the fields provided are changed.',
     {
       id: z.string().describe('Contact ID to update'),
       firstName: z.string().optional().describe('First name'),
       lastName: z.string().optional().describe('Last name'),
-      email: z.string().email().optional().describe('Email address'),
-      phone: z.string().optional().describe('Phone number'),
-      companyId: z.string().optional().describe('ID of associated company'),
-      jobTitle: z.string().optional().describe('Job title'),
-      linkedinUrl: z.string().url().optional().describe('LinkedIn profile URL'),
-      city: z.string().optional().describe('City'),
+      ...contactParams,
     },
-    async (args) => {
+    async ({ id, ...args }) => {
     try {
-      const { id, ...updates } = args;
-      const person = await client.updatePerson(id, updates);
+      // `name` es un campo compuesto: si solo cambia una parte, conservamos la otra.
+      if ((args.firstName === undefined) !== (args.lastName === undefined)) {
+        const current = await client.getPerson(id);
+        args.firstName ??= current.name?.firstName;
+        args.lastName ??= current.name?.lastName;
+      }
+      const person = await client.updatePerson(id, toPersonData(args));
       return {
         content: [{
           type: 'text' as const,
@@ -129,13 +158,13 @@ export function registerPersonTools(server: McpServer, client: TwentyClient) {
     {
       query: z.string().describe('Search query (searches name and email)'),
       limit: z.number().optional().default(20).describe('Maximum number of results'),
-      offset: z.number().optional().default(0).describe('Number of results to skip'),
+      cursor: z.string().optional().describe('Pagination cursor: pass the endCursor returned by the previous page'),
     },
     async (args) => {
     try {
       const people = await client.searchPeople(args.query, {
         limit: args.limit,
-        offset: args.offset,
+        cursor: args.cursor,
       });
       return {
         content: [{
@@ -160,50 +189,11 @@ export function registerCompanyTools(server: McpServer, client: TwentyClient) {
     'Create a new company in Twenty CRM',
     {
       name: z.string().describe('Company name'),
-      domainName: z.string().optional().describe('Company domain name'),
-      address: z.string().optional().describe('Company address'),
-      employees: z.number().optional().describe('Number of employees'),
-      linkedinUrl: z.string().url().optional().describe('LinkedIn company URL'),
-      xUrl: z.string().url().optional().describe('X (Twitter) company URL'),
-      annualRecurringRevenue: z.number().optional().describe('Annual recurring revenue'),
-      idealCustomerProfile: z.boolean().optional().describe('Is this an ideal customer profile'),
+      ...companyParams,
     },
     async (args) => {
     try {
-      // Transform flat input to Twenty's nested structure
-      const companyData = {
-        name: args.name,
-        ...(args.domainName && {
-          domainName: {
-            primaryLinkUrl: args.domainName,
-          },
-        }),
-        ...(args.address && {
-          address: {
-            addressStreet1: args.address,
-          },
-        }),
-        ...(args.employees && { employees: args.employees }),
-        ...(args.linkedinUrl && {
-          linkedinLink: {
-            primaryLinkUrl: args.linkedinUrl,
-          },
-        }),
-        ...(args.xUrl && {
-          xLink: {
-            primaryLinkUrl: args.xUrl,
-          },
-        }),
-        ...(args.annualRecurringRevenue && {
-          annualRecurringRevenue: {
-            amountMicros: args.annualRecurringRevenue * 1000000, // Convert to micros
-            currencyCode: 'USD',
-          },
-        }),
-        ...(args.idealCustomerProfile !== undefined && { idealCustomerProfile: args.idealCustomerProfile }),
-      };
-
-      const company = await client.createCompany(companyData);
+      const company = await client.createCompany(toCompanyData(args) as Company);
       return {
         content: [{
           type: 'text' as const,
@@ -247,56 +237,16 @@ export function registerCompanyTools(server: McpServer, client: TwentyClient) {
 
   server.tool(
     'update_company',
-    'Update an existing company in Twenty CRM',
+    'Update an existing company in Twenty CRM. Only the fields provided are changed.',
     {
       id: z.string().describe('Company ID to update'),
       name: z.string().optional().describe('Company name'),
-      domainName: z.string().optional().describe('Company domain name'),
-      address: z.string().optional().describe('Company address'),
-      employees: z.number().optional().describe('Number of employees'),
-      linkedinUrl: z.string().url().optional().describe('LinkedIn company URL'),
-      xUrl: z.string().url().optional().describe('X (Twitter) company URL'),
-      annualRecurringRevenue: z.number().optional().describe('Annual recurring revenue'),
-      idealCustomerProfile: z.boolean().optional().describe('Is this an ideal customer profile'),
+      ...companyParams,
     },
-    async (args) => {
+    async ({ id, ...args }) => {
     try {
-      const { id, ...updateData } = args;
-      
-      // Transform flat input to Twenty's nested structure
-      const updates = {
-        ...(updateData.name && { name: updateData.name }),
-        ...(updateData.domainName && {
-          domainName: {
-            primaryLinkUrl: updateData.domainName,
-          },
-        }),
-        ...(updateData.address && {
-          address: {
-            addressStreet1: updateData.address,
-          },
-        }),
-        ...(updateData.employees && { employees: updateData.employees }),
-        ...(updateData.linkedinUrl && {
-          linkedinLink: {
-            primaryLinkUrl: updateData.linkedinUrl,
-          },
-        }),
-        ...(updateData.xUrl && {
-          xLink: {
-            primaryLinkUrl: updateData.xUrl,
-          },
-        }),
-        ...(updateData.annualRecurringRevenue && {
-          annualRecurringRevenue: {
-            amountMicros: updateData.annualRecurringRevenue * 1000000,
-            currencyCode: 'USD',
-          },
-        }),
-        ...(updateData.idealCustomerProfile !== undefined && { idealCustomerProfile: updateData.idealCustomerProfile }),
-      };
-
-      const company = await client.updateCompany(id, updates);
+      // `currency` solo tiene sentido junto con annualRevenue.
+      const company = await client.updateCompany(id, toCompanyData(args));
       return {
         content: [{
           type: 'text' as const,
@@ -319,13 +269,13 @@ export function registerCompanyTools(server: McpServer, client: TwentyClient) {
     {
       query: z.string().describe('Search query (searches name and domain)'),
       limit: z.number().optional().default(20).describe('Maximum number of results'),
-      offset: z.number().optional().default(0).describe('Number of results to skip'),
+      cursor: z.string().optional().describe('Pagination cursor: pass the endCursor returned by the previous page'),
     },
     async (args) => {
     try {
       const companies = await client.searchCompanies(args.query, {
         limit: args.limit,
-        offset: args.offset,
+        cursor: args.cursor,
       });
       return {
         content: [{
@@ -344,89 +294,241 @@ export function registerCompanyTools(server: McpServer, client: TwentyClient) {
   });
 }
 
+const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
+const errorText = (prefix: string, error: unknown) => ({
+  content: [{ type: 'text' as const, text: `${prefix}: ${error instanceof Error ? error.message : 'Unknown error'}` }],
+  isError: true,
+});
+
+const TASK_STATUS = z.enum(['TODO', 'IN_PROGRESS', 'DONE']);
+const linkParams = (what: string) => ({
+  companyId: z.string().optional().describe(`ID of a company to link this ${what} to`),
+  personId: z.string().optional().describe(`ID of a contact to link this ${what} to`),
+  opportunityId: z.string().optional().describe(`ID of an opportunity to link this ${what} to`),
+});
+const filterParams = (what: string) => ({
+  companyId: z.string().optional().describe(`Only ${what} linked to this company`),
+  personId: z.string().optional().describe(`Only ${what} linked to this contact`),
+  opportunityId: z.string().optional().describe(`Only ${what} linked to this opportunity`),
+  limit: z.number().optional().default(20).describe('Maximum number of results per page'),
+  cursor: z.string().optional().describe('Pagination cursor: pass the endCursor returned by the previous page'),
+});
+
+async function linkAfterCreate(
+  client: TwentyClient,
+  kind: 'task' | 'note',
+  activityId: string | undefined,
+  links: { companyId?: string; personId?: string; opportunityId?: string },
+): Promise<string> {
+  if (!activityId || !(links.companyId || links.personId || links.opportunityId)) return '';
+  try {
+    const created = await client.linkActivity({ kind, activityId, ...links });
+    return `\nLinked to ${created.length} record(s).`;
+  } catch (linkError) {
+    return `\n${kind === 'task' ? 'Task' : 'Note'} created but linking failed: ${linkError instanceof Error ? linkError.message : 'Unknown error'}`;
+  }
+}
+
 export function registerTaskTools(server: McpServer, client: TwentyClient) {
   server.tool(
     'create_task',
-    'Create a new task in Twenty CRM',
+    'Create a new task in Twenty CRM, optionally linked to a company, contact and/or opportunity',
     {
       title: z.string().describe('Task title'),
-      body: z.string().optional().describe('Task description'),
+      body: z.string().optional().describe('Task description (markdown)'),
       dueAt: z.string().optional().describe('Due date (ISO 8601 format)'),
-      status: z.enum(['TODO', 'IN_PROGRESS', 'DONE']).optional().default('TODO').describe('Task status'),
-      assigneeId: z.string().optional().describe('ID of the person assigned to the task'),
+      status: TASK_STATUS.optional().default('TODO').describe('Task status'),
+      assigneeId: z.string().optional().describe('Workspace member ID of the assignee (see list_workspace_members)'),
+      ...linkParams('task'),
     },
     async (args) => {
     try {
-      const task = await client.createTask(args);
-      return {
-        content: [{
-          type: 'text' as const,
-          text: `Task created successfully: ${task.title} (ID: ${task.id})`
-        }]
-      };
+      const { companyId, personId, opportunityId, ...taskData } = args;
+      const task = await client.createTask(taskData);
+      const linkInfo = await linkAfterCreate(client, 'task', task.id, { companyId, personId, opportunityId });
+      return text(`Task created successfully: ${task.title} (ID: ${task.id})${linkInfo}`);
     } catch (error) {
-      return {
-        content: [{
-          type: 'text' as const,
-          text: `Error creating task: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]
-      };
+      return errorText('Error creating task', error);
     }
   });
 
   server.tool(
     'get_tasks',
-    'Retrieve tasks from Twenty CRM',
+    'List tasks with assignee, due date, body and linked records. Filter by status, assignee or linked record. Paginates by cursor.',
     {
-      limit: z.number().optional().default(20).describe('Maximum number of results'),
-      offset: z.number().optional().default(0).describe('Number of results to skip'),
+      status: TASK_STATUS.optional().describe('Only tasks with this status'),
+      assigneeId: z.string().optional().describe('Only tasks assigned to this workspace member'),
+      ...filterParams('tasks'),
     },
     async (args) => {
     try {
-      const tasks = await client.getTasks({
-        limit: args.limit,
-        offset: args.offset,
-      });
-      return {
-        content: [{
-          type: 'text' as const,
-          text: JSON.stringify(tasks, null, 2)
-        }]
-      };
+      return text(JSON.stringify(await client.listActivities('task', args), null, 2));
     } catch (error) {
-      return {
-        content: [{
-          type: 'text' as const,
-          text: `Error retrieving tasks: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]
-      };
+      return errorText('Error retrieving tasks', error);
+    }
+  });
+
+  server.tool(
+    'get_task',
+    'Retrieve a task by ID, including body, assignee, due date and linked records',
+    { id: z.string().describe('Task ID') },
+    async ({ id }) => {
+    try {
+      const task = await client.getActivity('task', id);
+      return task ? text(JSON.stringify(task, null, 2)) : { ...text(`Task not found: ${id}`), isError: true };
+    } catch (error) {
+      return errorText('Error retrieving task', error);
+    }
+  });
+
+  server.tool(
+    'update_task',
+    'Update a task: title, body, status, due date or assignee. Only the fields provided are changed.',
+    {
+      id: z.string().describe('Task ID'),
+      title: z.string().optional().describe('New title'),
+      body: z.string().optional().describe('New description (markdown); replaces the current one'),
+      status: TASK_STATUS.optional().describe('New status'),
+      dueAt: z.string().nullable().optional().describe('New due date (ISO 8601), or null to clear it'),
+      assigneeId: z.string().nullable().optional().describe('Workspace member ID of the new assignee, or null to unassign'),
+    },
+    async ({ id, ...updates }) => {
+    try {
+      if (Object.keys(updates).length === 0) {
+        return { ...text('Error: provide at least one field to update'), isError: true };
+      }
+      const task = await client.updateTask(id, updates);
+      return text(`Task updated successfully:\n${JSON.stringify(task, null, 2)}`);
+    } catch (error) {
+      return errorText('Error updating task', error);
     }
   });
 
   server.tool(
     'create_note',
-    'Create a new note in Twenty CRM',
+    'Create a new note in Twenty CRM, optionally linked to a company, contact and/or opportunity',
     {
       title: z.string().optional().describe('Note title'),
-      body: z.string().describe('Note content'),
-      authorId: z.string().optional().describe('ID of the note author'),
+      body: z.string().describe('Note content (markdown)'),
+      ...linkParams('note'),
     },
     async (args) => {
     try {
-      const note = await client.createNote(args);
-      return {
-        content: [{
-          type: 'text' as const,
-          text: `Note created successfully: ${note.title || 'Untitled'} (ID: ${note.id})`
-        }]
-      };
+      const { companyId, personId, opportunityId, ...noteData } = args;
+      const note = await client.createNote(noteData);
+      const linkInfo = await linkAfterCreate(client, 'note', note.id, { companyId, personId, opportunityId });
+      return text(`Note created successfully: ${note.title || 'Untitled'} (ID: ${note.id})${linkInfo}`);
     } catch (error) {
-      return {
-        content: [{
-          type: 'text' as const,
-          text: `Error creating note: ${error instanceof Error ? error.message : 'Unknown error'}`
-        }]
-      };
+      return errorText('Error creating note', error);
+    }
+  });
+
+  server.tool(
+    'get_notes',
+    'List notes with body and linked records, newest first. Filter by linked company, contact or opportunity. Paginates by cursor.',
+    filterParams('notes'),
+    async (args) => {
+    try {
+      return text(JSON.stringify(await client.listActivities('note', args), null, 2));
+    } catch (error) {
+      return errorText('Error retrieving notes', error);
+    }
+  });
+
+  server.tool(
+    'get_note',
+    'Retrieve a note by ID, including body and linked records',
+    { id: z.string().describe('Note ID') },
+    async ({ id }) => {
+    try {
+      const note = await client.getActivity('note', id);
+      return note ? text(JSON.stringify(note, null, 2)) : { ...text(`Note not found: ${id}`), isError: true };
+    } catch (error) {
+      return errorText('Error retrieving note', error);
+    }
+  });
+
+  server.tool(
+    'link_activity',
+    'Link an existing task or note to a company, contact and/or opportunity',
+    {
+      kind: z.enum(['task', 'note']).describe('Whether the activity is a task or a note'),
+      activityId: z.string().describe('ID of the task or note'),
+      companyId: z.string().optional().describe('ID of the company to link'),
+      personId: z.string().optional().describe('ID of the contact to link'),
+      opportunityId: z.string().optional().describe('ID of the opportunity to link'),
+    },
+    async (args) => {
+    try {
+      if (!args.companyId && !args.personId && !args.opportunityId) {
+        return { ...text('Error: provide at least one of companyId, personId or opportunityId'), isError: true };
+      }
+      const links = await client.linkActivity(args);
+      return text(`Linked ${args.kind} ${args.activityId} to ${links.length} record(s).`);
+    } catch (error) {
+      return errorText(`Error linking ${args.kind}`, error);
+    }
+  });
+
+  server.tool(
+    'list_workspace_members',
+    'List the workspace members (users) of Twenty CRM. Use their IDs as task assignees.',
+    {},
+    async () => {
+    try {
+      return text(JSON.stringify(await client.listWorkspaceMembers(), null, 2));
+    } catch (error) {
+      return errorText('Error listing workspace members', error);
+    }
+  });
+}
+
+export function registerDeleteTools(server: McpServer, client: TwentyClient) {
+  // Códigos de confirmación de un solo uso, por sesión MCP. Obligan a pasar por
+  // la vista previa (y a que el usuario la vea) antes de borrar.
+  const pending = new Map<string, { objectType: string; id: string; expires: number }>();
+  const CONFIRMATION_TTL_MS = 10 * 60 * 1000;
+
+  server.tool(
+    'delete_record',
+    'Delete (move to trash) a task, note, company, contact or opportunity. Two steps: call first WITHOUT confirmationToken; ' +
+    'it shows which record would be deleted and returns a confirmationToken. Show that to the user, and only after the user ' +
+    'explicitly approves, call again with the same objectType, id and the confirmationToken. ' +
+    'Deleted records go to Twenty\'s trash and can be restored from the Twenty UI.',
+    {
+      objectType: z.enum(['task', 'note', 'company', 'person', 'opportunity']).describe('Type of record'),
+      id: z.string().describe('Record ID'),
+      confirmationToken: z.string().optional().describe('Token returned by the preview call, after the user approved'),
+    },
+    { title: 'Delete record', destructiveHint: true, idempotentHint: false, readOnlyHint: false },
+    async ({ objectType, id, confirmationToken }) => {
+    try {
+      const label = await client.describeRecord(objectType, id);
+      if (label === null) {
+        return { ...text(`No ${objectType} found with ID ${id}. Nothing was deleted.`), isError: true };
+      }
+
+      if (!confirmationToken) {
+        const token = randomUUID().slice(0, 8);
+        pending.set(token, { objectType, id, expires: Date.now() + CONFIRMATION_TTL_MS });
+        return text(
+          `About to delete ${objectType} "${label}" (ID: ${id}). Nothing has been deleted yet.\n` +
+          `Ask the user to confirm. If they approve, call delete_record again with confirmationToken: "${token}" (valid 10 minutes).`,
+        );
+      }
+
+      const entry = pending.get(confirmationToken);
+      if (!entry || entry.objectType !== objectType || entry.id !== id || entry.expires < Date.now()) {
+        return {
+          ...text('Invalid or expired confirmationToken for this record. Nothing was deleted; call without a token to get a new one.'),
+          isError: true,
+        };
+      }
+      pending.delete(confirmationToken);
+      await client.deleteRecord(objectType, id);
+      return text(`Deleted ${objectType} "${label}" (ID: ${id}). It can be restored from the trash in Twenty.`);
+    } catch (error) {
+      return errorText(`Error deleting ${objectType}`, error);
     }
   });
 }

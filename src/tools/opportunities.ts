@@ -168,12 +168,13 @@ Contact ID: ${opportunity.pointOfContactId || 'None'}`
       startDate: z.string().optional().describe('Start date for close date range (ISO 8601)'),
       endDate: z.string().optional().describe('End date for close date range (ISO 8601)'),
       companyId: z.string().optional().describe('Filter by company ID'),
-      limit: z.number().default(20).describe('Maximum number of results'),
-      offset: z.number().default(0).describe('Number of results to skip')
+      limit: z.number().default(20).describe('Maximum number of results per page'),
+      cursor: z.string().optional().describe('Pagination cursor: pass the endCursor returned by the previous page')
     },
     async (input) => {
       try {
-        const opportunities = await client.searchOpportunities(input);
+        const page = await client.searchOpportunities(input);
+        const opportunities = page.results;
         
         if (opportunities.length === 0) {
           return {
@@ -189,13 +190,17 @@ Contact ID: ${opportunity.pointOfContactId || 'None'}`
           const amount = opp.amount 
             ? `${opp.amount.currencyCode} ${(opp.amount.amountMicros / 1000000).toFixed(2)}`
             : 'N/A';
-          return `- ${opp.name} (${opp.stage || 'No stage'}) - ${amount}`;
+          return `- ${opp.name} (${opp.stage || 'No stage'}) - ${amount} [ID: ${opp.id}]`;
         }).join('\n');
+        const total = page.totalCount !== undefined ? ` of ${page.totalCount}` : '';
+        const more = page.pageInfo.hasNextPage
+          ? `\n\nMore results available. Next page: cursor="${page.pageInfo.endCursor}"`
+          : '';
         
         return {
           content: [{
             type: 'text',
-            text: `Found ${opportunities.length} opportunities:\n${opportunityList}`
+            text: `Found ${opportunities.length}${total} opportunities:\n${opportunityList}${more}`
           }],
           data: opportunities
         };
