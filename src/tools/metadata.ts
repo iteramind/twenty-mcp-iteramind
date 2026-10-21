@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { TwentyClient } from '../client/twenty-client.js';
+import type { FieldMetadata } from '../types/metadata.js';
+
+// Valores válidos de un campo SELECT / MULTI_SELECT (p. ej. las etapas de oportunidad).
+function optionValues(field: FieldMetadata): string {
+  return Array.isArray(field.options) && field.options.length
+    ? field.options.map(o => o.value).join(', ')
+    : '';
+}
 
 export function registerMetadataTools(server: McpServer, client: TwentyClient) {
   server.tool(
@@ -118,8 +126,9 @@ export function registerMetadataTools(server: McpServer, client: TwentyClient) {
           const nullableText = field.isNullable ? '(optional)' : '(required)';
           const defaultText = field.defaultValue ? ` [default: ${field.defaultValue}]` : '';
           
+          const values = optionValues(field);
           return `  ${customIcon} **${field.label}** (${field.name})
-    Type: ${field.type} ${nullableText}${defaultText}
+    Type: ${field.type} ${nullableText}${defaultText}${values ? `\n    Values: ${values}` : ''}
     ${field.description ? `Description: ${field.description}` : 'No description'}`;
         }).join('\n\n');
 
@@ -227,6 +236,10 @@ ${fieldList}
             }
             if (field.defaultValue) {
               content += `  Default: ${field.defaultValue}\n`;
+            }
+            const values = optionValues(field);
+            if (values) {
+              content += `  Values: ${values}\n`;
             }
           });
           

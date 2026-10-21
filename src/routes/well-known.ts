@@ -23,10 +23,11 @@ export class WellKnownRoutes {
     this.serverUrl = process.env.MCP_SERVER_URL || 'http://localhost:3000';
   }
 
-  async handleProtectedResource(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    // RFC 9728 - OAuth 2.0 Protected Resource Metadata
+  async handleProtectedResource(req: IncomingMessage, res: ServerResponse, resourcePath = ''): Promise<void> {
+    // RFC 9728 - OAuth 2.0 Protected Resource Metadata. `resource` debe ser la
+    // URL a la que se conectó el cliente (raíz o /mcp).
     const metadata = {
-      resource: this.serverUrl,
+      resource: `${this.serverUrl.replace(/\/$/, '')}${resourcePath}`,
       authorization_servers: [this.authServerUrl],
       bearer_methods_supported: ['header'],
       resource_documentation: 'https://github.com/jezweb/twenty-mcp',
@@ -83,8 +84,9 @@ export class WellKnownRoutes {
   async handleOptions(req: IncomingMessage, res: ServerResponse): Promise<void> {
     res.writeHead(200, {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, Mcp-Session-Id, Mcp-Protocol-Version',
+      'Access-Control-Expose-Headers': 'Mcp-Session-Id, WWW-Authenticate',
       'Access-Control-Max-Age': '86400',
     });
     res.end();

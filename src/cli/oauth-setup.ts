@@ -1,13 +1,10 @@
 #!/usr/bin/env node
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import readline from 'readline';
 import crypto from 'crypto';
 import { isIP } from 'node:net';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 interface SetupConfig {
   authEnabled: boolean;
@@ -335,7 +332,6 @@ class OAuthSetupCLI {
 
   private createEnvFile(): void {
     const envPath = join(process.cwd(), '.env');
-    const envExamplePath = join(process.cwd(), '.env.example');
     
     let envContent = '';
     

@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
-import { homedir } from 'os';
+import { join } from 'path';
 import chalk from 'chalk';
 import { getPlatformConfigDir } from './platform-utils.js';
 

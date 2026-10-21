@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { isIP } from 'node:net';
 import { crossPlatformSpawn } from '../platform-utils.js';
 import { getExecutionContext } from '../utils/execution-context.js';
-import { showNPXWelcome, explainNPXConfiguration, showNPXCompletion } from '../utils/npx-helpers.js';
+import { explainNPXConfiguration, showNPXCompletion } from '../utils/npx-helpers.js';
 
 interface SetupOptions {
   oauth?: boolean;
@@ -531,14 +531,9 @@ async function testConfiguration(configManager: ConfigManager) {
       cwd: process.cwd(),
     });
 
-    let output = '';
-    testProcess.stdout?.on('data', (data) => {
-      output += data.toString();
-    });
-
-    testProcess.stderr?.on('data', (data) => {
-      output += data.toString();
-    });
+    // Vaciar la salida para que el proceso no se bloquee con el búfer lleno.
+    testProcess.stdout?.resume();
+    testProcess.stderr?.resume();
 
     testProcess.on('close', (code) => {
       if (code === 0) {
@@ -550,7 +545,7 @@ async function testConfiguration(configManager: ConfigManager) {
       resolve();
     });
 
-    testProcess.on('error', (error) => {
+    testProcess.on('error', () => {
       console.log(chalk.yellow('⚠️  Could not run configuration test'));
       resolve();
     });

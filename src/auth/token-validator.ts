@@ -1,4 +1,3 @@
-import type { IncomingHttpHeaders } from 'node:http';
 import { ClerkClient } from './clerk-client.js';
 
 export interface TokenValidationResult {

@@ -9,6 +9,7 @@ A Model Context Protocol (MCP) server that provides seamless integration with th
 
 ## 📋 Table of Contents
 
+- [Despliegue SETEC](#-despliegue-setec-mcpsetecone)
 - [Overview](#overview)
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
@@ -20,6 +21,40 @@ A Model Context Protocol (MCP) server that provides seamless integration with th
 - [Usage](#usage)
 - [Troubleshooting](#troubleshooting)
 - [Additional Resources](#additional-resources)
+
+## 🏢 Despliegue SETEC (mcp.setec.one)
+
+**Conector recomendado en Claude:** una sola entrada llamada **CRM SETEC** con la URL
+`https://mcp.setec.one/mcp`. La raíz `https://mcp.setec.one` responde igual (mismo
+endpoint MCP y metadatos OAuth), pero conviene no tener las dos: cada entrada guarda
+su propio login. Si hoy tienes "CRM setec" y "CRM SETEC", borra una y reconecta la otra.
+
+**Autenticación.** Cada usuario inicia sesión con su propia cuenta de Twenty
+(`crm.setec.one` es el servidor OAuth). El servidor MCP no guarda tokens: reenvía el
+bearer token del cliente a Twenty. Para que las sesiones no caduquen:
+
+- Si el token ya expiró, el servidor responde **HTTP 401** con
+  `WWW-Authenticate: Bearer error="invalid_token"`. Esa es la señal con la que Claude
+  usa su refresh token y reintenta, sin reconexión manual.
+- Una sesión MCP abierta acepta el token renovado del **mismo** usuario (mismo `sub`
+  y workspace del JWT). Antes la sesión seguía usando el token con el que se abrió y
+  Twenty contestaba "Token has expired".
+- Se descartó usar una API key fija del lado del servidor: todas las acciones
+  quedarían a nombre de una sola cuenta y se perderían los permisos por usuario.
+
+**Paginación.** Twenty pagina por cursor. Las búsquedas y listados aceptan `limit` y
+`cursor`, y regresan `pageInfo.endCursor`. Para la siguiente página, pasa ese valor
+como `cursor`. Ya no existe `offset`.
+
+**Verificación.**
+
+```bash
+npm run test:unit      # pruebas sin red (cliente GraphQL simulado + servidor HTTP real)
+npm run verify:live    # contra Twenty real; requiere TWENTY_API_KEY y TWENTY_BASE_URL en .env
+npm run e2e:write      # todas las herramientas que escriben, sobre registros "TEST-MCP" que
+                       # crea y al final manda a la papelera (nunca borra otros registros)
+npm run e2e:http       # levanta el servidor HTTP en local y lo usa como Claude (solo lectura)
+```
 
 ## Overview
 

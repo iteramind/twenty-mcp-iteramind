@@ -5,14 +5,26 @@ import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { TwentyClient } from './client/twenty-client.js';
-import { registerPersonTools, registerCompanyTools, registerTaskTools, registerOpportunityTools } from './tools/index.js';
+import { registerPersonTools, registerCompanyTools, registerTaskTools, registerOpportunityTools, registerDeleteTools, registerMetadataTools } from './tools/index.js';
 import { WellKnownRoutes } from './routes/well-known.js';
 import { IPMiddleware } from './auth/ip-middleware.js';
+import { decodeBearerClaims, isExpired, tokenOwner } from './auth/bearer.js';
 
 interface McpSession {
   server: McpServer;
   transport: StreamableHTTPServerTransport;
+  client: TwentyClient;
+  // Token con el que se llama a Twenty y usuario dueño de la sesión.
+  token: string;
+  owner: string | null;
+  // Token que Twenty ya rechazó (opaco o vencido a media llamada).
+  rejectedToken?: string;
+  lastSeen: number;
 }
+
+// Sesiones sin actividad por más de este tiempo se cierran; el cliente MCP
+// recibe 404 y abre una nueva de forma transparente.
+const SESSION_IDLE_MS = 6 * 60 * 60 * 1000;
 
 async function main() {
   const port = parseInt(process.env.PORT || '3000');
@@ -58,20 +70,28 @@ async function main() {
     };
   }
 
-  function sendUnauthorized(res: import('node:http').ServerResponse, message: string): void {
+  function sendUnauthorized(
+    res: import('node:http').ServerResponse,
+    message: string,
+    resourcePath: string,
+    error?: 'invalid_token',
+  ): void {
+    // `error="invalid_token"` le indica al cliente que su token ya no sirve y
+    // que debe renovarlo con su refresh token (RFC 6750 §3.1).
+    const errorParam = error ? `error="${error}", error_description="${message}", ` : '';
     res.writeHead(401, {
       'Content-Type': 'application/json',
       // Points MCP clients at our protected-resource metadata so they know
       // to start Twenty's OAuth flow (RFC 9728 style challenge).
-      'WWW-Authenticate': `Bearer resource_metadata="${mcpServerUrl}/.well-known/oauth-protected-resource"`,
+      'WWW-Authenticate': `Bearer ${errorParam}resource_metadata="${mcpServerUrl}/.well-known/oauth-protected-resource${resourcePath}"`,
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type',
     });
-    res.end(JSON.stringify({ error: 'unauthorized', error_description: message }));
+    res.end(JSON.stringify({ error: error ?? 'unauthorized', error_description: message }));
   }
 
-  function createSession(apiKey: string, baseUrl: string): McpSession {
+  function createSession(apiKey: string, baseUrl: string, owner: string | null): McpSession {
     const server = new McpServer({
       name: 'twenty-mcp-server',
       version: '1.0.0',
@@ -97,6 +117,8 @@ async function main() {
     registerCompanyTools(server, client);
     registerTaskTools(server, client);
     registerOpportunityTools(server, client);
+    registerDeleteTools(server, client);
+    registerMetadataTools(server, client);
 
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
@@ -108,9 +130,20 @@ async function main() {
       },
     });
 
-    const session: McpSession = { server, transport };
+    const session: McpSession = { server, transport, client, token: apiKey, owner, lastSeen: Date.now() };
+    client.onAuthError = () => { session.rejectedToken = session.token; };
     return session;
   }
+
+  setInterval(() => {
+    const cutoff = Date.now() - SESSION_IDLE_MS;
+    for (const [id, session] of sessions) {
+      if (session.lastSeen < cutoff) {
+        sessions.delete(id);
+        session.transport.close().catch(() => {});
+      }
+    }
+  }, 10 * 60 * 1000).unref();
 
   // Create HTTP server
   const httpServer = createServer(async (req, res) => {
@@ -139,17 +172,22 @@ async function main() {
 
     // Handle OAuth discovery endpoints (points clients at Twenty's own
     // authorization server - see routes/well-known.ts)
-    if (req.url === '/.well-known/oauth-protected-resource') {
+    const path = new URL(req.url || '/', `http://localhost:${port}`).pathname;
+
+    // RFC 9728: el cliente que se conecta a /mcp busca primero
+    // /.well-known/oauth-protected-resource/mcp; el que se conecta a la raíz,
+    // /.well-known/oauth-protected-resource. Servimos ambos.
+    if (path === '/.well-known/oauth-protected-resource' || path === '/.well-known/oauth-protected-resource/mcp') {
       if (!authEnabled) {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         res.end('Not Found');
         return;
       }
-      await wellKnownRoutes.handleProtectedResource(req, res);
+      await wellKnownRoutes.handleProtectedResource(req, res, path.endsWith('/mcp') ? '/mcp' : '');
       return;
     }
 
-    if (req.url === '/.well-known/oauth-authorization-server') {
+    if (path === '/.well-known/oauth-authorization-server' || path === '/.well-known/oauth-authorization-server/mcp') {
       if (!authEnabled) {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         res.end('Not Found');
@@ -159,8 +197,9 @@ async function main() {
       return;
     }
 
-    // Only handle /mcp endpoint
-    if (!req.url?.startsWith('/mcp')) {
+    // El endpoint MCP es /mcp; la raíz responde igual para que
+    // https://mcp.setec.one y https://mcp.setec.one/mcp sean equivalentes.
+    if (path !== '/mcp' && path !== '/') {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not Found');
       return;
@@ -171,19 +210,27 @@ async function main() {
       // We don't verify it ourselves - Twenty's own API is the enforcement
       // point and will reject invalid/expired tokens on the actual GraphQL
       // call, so there's no separate identity layer to keep in sync.
+      const resourcePath = path === '/mcp' ? '/mcp' : '';
       const authHeader = req.headers.authorization;
       let bearerToken: string | undefined;
 
       if (authHeader) {
         if (!authHeader.startsWith('Bearer ')) {
-          sendUnauthorized(res, 'Invalid Authorization header format');
+          sendUnauthorized(res, 'Invalid Authorization header format', resourcePath);
           return;
         }
         bearerToken = authHeader.substring(7);
       } else if (requireAuth) {
-        sendUnauthorized(res, 'Missing Authorization header - please log in with your Twenty account');
+        sendUnauthorized(res, 'Missing Authorization header - please log in with your Twenty account', resourcePath);
         return;
       }
+
+      const claims = bearerToken ? decodeBearerClaims(bearerToken) : null;
+      if (authEnabled && bearerToken && isExpired(claims)) {
+        sendUnauthorized(res, 'Access token expired', resourcePath, 'invalid_token');
+        return;
+      }
+      const owner = tokenOwner(claims);
 
       // Reuse the session's existing server/transport if the client sent
       // back a known Mcp-Session-Id (e.g. a tools/list or tools/call
@@ -193,8 +240,45 @@ async function main() {
       const sessionIdHeader = Array.isArray(incomingSessionId) ? incomingSessionId[0] : incomingSessionId;
       let session = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
 
+      // Sesión que ya no existe (reinicio del servidor o cerrada por inactividad).
+      // El protocolo MCP pide 404 para que el cliente abra una nueva solo; con
+      // cualquier otro código el conector se queda atorado hasta reconectar a mano.
+      if (sessionIdHeader && !session) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          jsonrpc: '2.0',
+          error: { code: -32001, message: 'Session not found' },
+          id: null,
+        }));
+        return;
+      }
+
+      if (session && bearerToken && bearerToken === session.rejectedToken) {
+        sendUnauthorized(res, 'Access token rejected by Twenty', resourcePath, 'invalid_token');
+        return;
+      }
+
+      if (session && bearerToken && bearerToken !== session.token) {
+        // El cliente renovó su token. Antes la sesión seguía usando el token
+        // con el que se abrió y Twenty respondía "Token has expired".
+        if (owner && owner === session.owner) {
+          session.client.setApiKey(bearerToken);
+          session.token = bearerToken;
+        } else {
+          // Otro usuario, o no podemos saberlo: no reutilizamos la sesión.
+          // 404 obliga al cliente a abrir una nueva con su propio token.
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32001, message: 'Session not found' },
+            id: null,
+          }));
+          return;
+        }
+      }
+
       if (!session) {
-        const config = parseConfig(req.url, bearerToken);
+        const config = parseConfig(req.url || '/', bearerToken);
 
         if (!config.apiKey) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -207,10 +291,11 @@ async function main() {
           return;
         }
 
-        session = createSession(config.apiKey, config.baseUrl);
+        session = createSession(config.apiKey, config.baseUrl, owner);
         await session.server.connect(session.transport);
       }
 
+      session.lastSeen = Date.now();
       const { transport } = session;
 
       // Parse request body for POST requests
