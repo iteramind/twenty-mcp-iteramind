@@ -48,11 +48,13 @@ async function check(name: string, fn: () => Promise<string | void>) {
 }
 
 const stamp = new Date().toISOString().slice(0, 16);
+// Twenty exige dominio y email únicos incluso contra registros en la papelera.
+const runId = Date.now().toString(36);
 const created: { type: DeletableObject; id: string }[] = [];
 let failed = false;
 
 try {
-  let companyId = '', personId = '', opportunityId = '', taskId = '', noteId = '', memberId = '';
+  let companyId = '', personId = '', opportunityId = '', taskId = '', noteId = '', memberId = '', stage = '';
 
   await check('list_workspace_members', async () => {
     const members = json(`{"m":${await call('list_workspace_members', {})}}`).m;
@@ -63,7 +65,7 @@ try {
 
   await check('create_company', async () => {
     companyId = idFrom(await call('create_company', {
-      name: `${PREFIX} Empresa ${stamp}`, domainName: 'test-mcp.example', address: 'Calle Prueba 1',
+      name: `${PREFIX} Empresa ${stamp}`, domainName: `test-mcp-${runId}.example`, address: 'Calle Prueba 1',
       annualRevenue: 1234.5, accountOwnerId: memberId,
     }));
     created.push({ type: 'company', id: companyId });
@@ -74,7 +76,7 @@ try {
     await call('update_company', { id: companyId, annualRevenue: 999, currency: 'USD' });
     const company = json(await call('get_company', { id: companyId }));
     expect(company.annualRevenue?.amountMicros === 999_000_000 && company.annualRevenue.currencyCode === 'USD', JSON.stringify(company.annualRevenue));
-    expect(company.domainName?.primaryLinkUrl?.includes('test-mcp.example'), 'dominio no guardado');
+    expect(company.domainName?.primaryLinkUrl?.includes(`test-mcp-${runId}.example`), 'dominio no guardado');
     expect(company.accountOwnerId === memberId, 'accountOwner no guardado');
     return 'ingreso, dominio y responsable de cuenta guardados';
   });
@@ -87,7 +89,7 @@ try {
 
   await check('create_contact (teléfono nacional, empresa)', async () => {
     personId = idFrom(await call('create_contact', {
-      firstName: PREFIX, lastName: `Contacto ${stamp}`, email: 'test-mcp@example.test',
+      firstName: PREFIX, lastName: `Contacto ${stamp}`, email: `test-mcp-${runId}@example.test`,
       phone: '81 1234 5678', jobTitle: 'Prueba', companyId,
     }));
     created.push({ type: 'person', id: personId });
@@ -99,7 +101,7 @@ try {
     const person = json(await call('get_contact', { id: personId }));
     expect(person.name.firstName === PREFIX, `nombre perdido: ${JSON.stringify(person.name)}`);
     expect(person.name.lastName.startsWith('Contacto editado'), 'apellido no actualizado');
-    expect(person.emails?.primaryEmail === 'test-mcp@example.test', 'email perdido');
+    expect(person.emails?.primaryEmail === `test-mcp-${runId}@example.test`, 'email perdido');
     expect(person.companyId === companyId, 'empresa no vinculada');
     return `${person.name.firstName} ${person.name.lastName}, tel ${person.phones?.primaryPhoneNumber}`;
   });
@@ -112,8 +114,9 @@ try {
 
   await check('create_opportunity', async () => {
     opportunityId = idFrom(await call('create_opportunity', {
+      // Sin etapa: Twenty usa la etapa por defecto del workspace (las etapas pueden cambiar).
       name: `${PREFIX} Oportunidad ${stamp}`, amount: { value: 1500, currency: 'MXN' },
-      stage: 'NEW', closeDate: '2030-01-15', companyId, pointOfContactId: personId,
+      closeDate: '2030-01-15', companyId, pointOfContactId: personId,
     }));
     created.push({ type: 'opportunity', id: opportunityId });
     return opportunityId;
@@ -124,15 +127,17 @@ try {
     const text = await call('get_opportunity', { id: opportunityId });
     expect(text.includes('MXN 2500.00'), text);
     expect(text.includes(`Company ID: ${companyId}`) && text.includes(`Contact ID: ${personId}`), 'vínculos perdidos');
+    stage = text.match(/Stage: (\S+)/)?.[1] ?? '';
+    expect(stage && stage !== 'Not', `sin etapa: ${text}`);
     return text.split('\n').slice(1, 3).join(', ');
   });
 
   await check('search_opportunities por texto y por etapa', async () => {
     const byText = await call('search_opportunities', { query: PREFIX, limit: 5 });
     expect(byText.includes(opportunityId), 'no aparece por texto');
-    const byStage = await call('search_opportunities', { query: PREFIX, stage: 'NEW', limit: 5 });
+    const byStage = await call('search_opportunities', { query: PREFIX, stage, limit: 5 });
     expect(byStage.includes(opportunityId), 'no aparece por etapa');
-    return 'aparece en ambas';
+    return `aparece en ambas (etapa ${stage})`;
   });
 
   await check('create_task vinculada a empresa, contacto y oportunidad', async () => {

@@ -740,7 +740,7 @@ export function registerRelationshipTools(server: McpServer, client: TwentyClien
     'find_orphaned_records',
     'Find records that are missing important relationships (companies without contacts, contacts without companies, etc.)',
     {},
-    async (args) => {
+    async () => {
       try {
         const result = await client.findOrphanedRecords();
         

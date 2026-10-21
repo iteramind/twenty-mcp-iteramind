@@ -9,6 +9,7 @@
 import { spawn } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { TwentyClient } from '../src/client/twenty-client.js';
 
 const apiKey = process.env.TWENTY_API_KEY!;
 const port = 41000 + Math.floor(Math.random() * 1000);
@@ -72,13 +73,18 @@ try {
   });
 
   await check('search_opportunities por etapa con paginación por HTTP', async () => {
-    const t1 = text(await client.callTool({ name: 'search_opportunities', arguments: { stage: 'NEW', limit: 3 } }));
+    // La etapa con más oportunidades (las etapas se configuran en Twenty y pueden cambiar).
+    const grouped = await new TwentyClient({ apiKey, baseUrl: process.env.TWENTY_BASE_URL! }).listOpportunitiesByStage();
+    const [stage, list] = Object.entries(grouped).sort((x, y) => y[1].length - x[1].length)[0];
+    expect(list.length >= 2, 'ninguna etapa tiene 2+ oportunidades para probar paginación');
+    const limit = Math.max(1, Math.floor(list.length / 2));
+    const t1 = text(await client.callTool({ name: 'search_opportunities', arguments: { stage, limit } }));
     const cursor = t1.match(/cursor="([^"]+)"/)?.[1];
     expect(cursor, `sin cursor: ${t1}`);
-    const t2 = text(await client.callTool({ name: 'search_opportunities', arguments: { stage: 'NEW', limit: 3, cursor } }));
+    const t2 = text(await client.callTool({ name: 'search_opportunities', arguments: { stage, limit, cursor } }));
     const ids = (t: string) => [...t.matchAll(/ID: ([0-9a-f-]{36})/g)].map(m => m[1]);
     expect(!ids(t2).some(id => ids(t1).includes(id)), 'páginas repetidas');
-    return `${t1.split('\n')[0]} / página 2: ${ids(t2).length}`;
+    return `etapa ${stage}: ${t1.split('\n')[0]} / página 2: ${ids(t2).length}`;
   });
 
   await check('get_tasks por HTTP (limit, detalle)', async () => {

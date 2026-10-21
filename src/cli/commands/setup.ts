@@ -303,20 +303,15 @@ async function writeConfiguration(config: SetupConfig) {
 async function testConfiguration() {
   console.log(chalk.bold.blue('\n🧪 Testing Configuration'));
   
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<void>((resolve) => {
     const testProcess = spawn('npm', ['run', 'validate'], {
       stdio: 'pipe',
       cwd: process.cwd(),
     });
 
-    let output = '';
-    testProcess.stdout?.on('data', (data) => {
-      output += data.toString();
-    });
-
-    testProcess.stderr?.on('data', (data) => {
-      output += data.toString();
-    });
+    // Vaciar la salida para que el proceso no se bloquee con el búfer lleno.
+    testProcess.stdout?.resume();
+    testProcess.stderr?.resume();
 
     testProcess.on('close', (code) => {
       if (code === 0) {
@@ -329,7 +324,7 @@ async function testConfiguration() {
       }
     });
 
-    testProcess.on('error', (error) => {
+    testProcess.on('error', () => {
       console.log(chalk.yellow('⚠️  Could not run configuration test'));
       resolve(); // Don't fail setup for test issues
     });

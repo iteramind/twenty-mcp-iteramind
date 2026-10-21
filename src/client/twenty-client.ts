@@ -10,12 +10,9 @@ import {
   RelationshipSummary, 
   CompanyContactsResult, 
   PersonOpportunitiesResult, 
-  OpportunityActivitiesResult,
-  RelationshipHierarchy,
   OrphanedRecords,
   LinkOpportunityInput,
   TransferContactInput,
-  BulkRelationshipUpdate
 } from '../types/relationships.js';
 
 type Connection<T> = {
@@ -641,9 +638,9 @@ export class TwentyClient {
       }
     `;
 
-    // Las notas de Twenty no tienen autor asignable (lo registra `createdBy`).
-    const { body, authorId: _authorId, ...rest } = note;
-    const data = { ...rest, ...this.toBodyV2(body) };
+    // Las notas de Twenty no tienen autor asignable (lo registra `createdBy`),
+    // así que `authorId` no se envía.
+    const data = { title: note.title, ...this.toBodyV2(note.body) };
     const result = await this.client.request(mutation, { data }) as { createNote: Note };
     return result.createNote;
   }

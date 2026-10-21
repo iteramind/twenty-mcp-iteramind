@@ -1,4 +1,4 @@
-import { IncomingMessage, ServerResponse } from 'node:http';
+import { ServerResponse } from 'node:http';
 import { AuthenticatedRequest } from '../auth/middleware.js';
 import { getKeyStorageService } from '../auth/key-storage.js';
 

@@ -159,12 +159,10 @@ async function runNpmScript(script: string): Promise<void> {
       cwd: process.cwd(),
     });
 
-    let output = '';
     let errorOutput = '';
 
     testProcess.stdout?.on('data', (data) => {
       const text = data.toString();
-      output += text;
       // Show real-time output for important messages
       if (text.includes('SUCCESS') || text.includes('ERROR') || text.includes('WARNING')) {
         process.stdout.write(text);

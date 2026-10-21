@@ -19,7 +19,7 @@ const ghost = '3f2b9c1e-7d4a-4e8b-9a61-5c2d8e0f1a27'; // no existe
 const calls: [string, any][] = [
   ['update_contact', { id: ghost, firstName: 'X', lastName: 'Y', email: 'x@example.test', phone: '8110000000', jobTitle: 'X', linkedinUrl: 'https://linkedin.com/in/x', companyId: ghost }],
   ['update_company', { id: ghost, name: 'X', domainName: 'x.test', address: 'Calle 1', linkedinUrl: 'https://linkedin.com/company/x', annualRevenue: 10, accountOwnerId: ghost }],
-  ['update_opportunity', { id: ghost, name: 'X', amount: { value: 1, currency: 'MXN' }, stage: 'NEW', closeDate: '2030-01-01', companyId: ghost, pointOfContactId: ghost }],
+  ['update_opportunity', { id: ghost, name: 'X', amount: { value: 1, currency: 'MXN' }, closeDate: '2030-01-01', companyId: ghost, pointOfContactId: ghost }],
 ];
 for (const [name, args] of calls) {
   const r = await mcp.callTool({ name, arguments: args });
